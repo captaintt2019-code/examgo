@@ -224,9 +224,7 @@
     function App() {
       const [unlocked, setUnlocked]       = useState(false);
       const [mode, setMode]               = useState('worksheet');
-      const [provider, setProvider]       = useState('claude');
       const [apiKey, setApiKey]           = useState(() => localStorage.getItem('examgo_key') || '');
-      const [geminiKey, setGeminiKey]     = useState(() => localStorage.getItem('examgo_gemini_key') || '');
       const [showKey, setShowKey]         = useState(false);
       const [image, setImage]             = useState(null);
       const [converting, setConverting]   = useState(false);
@@ -246,7 +244,6 @@
       if (!unlocked) return <PasswordGate onUnlock={() => setUnlocked(true)} />;
 
       const saveKey = (k) => { setApiKey(k); k ? localStorage.setItem('examgo_key', k) : localStorage.removeItem('examgo_key'); };
-      const saveGeminiKey = (k) => { setGeminiKey(k); k ? localStorage.setItem('examgo_gemini_key', k) : localStorage.removeItem('examgo_gemini_key'); };
       const saveHistory = (entries) => { setHistory(entries); localStorage.setItem('examgo_history', JSON.stringify(entries)); };
       const addHistory = (entry) => saveHistory([entry, ...history].slice(0, 50));
       const deleteHistory = (id) => saveHistory(history.filter(e => e.id !== id));
@@ -284,27 +281,31 @@
       const onDragLeave = () => setIsDragging(false);
 
       const callApi = async (sysPrompt, userText) => {
-        const key = provider === 'claude' ? apiKey.trim() : geminiKey.trim();
-        if (!key) throw new Error('請輸入 API 密鑰。');
-        if (provider === 'claude') {
-          const res = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: sysPrompt, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } }, { type: 'text', text: userText }] }] }),
-          });
-          if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `API 錯誤 ${res.status}`); }
-          const data = await res.json();
-          return data.content?.find(b => b.type === 'text')?.text || '';
-        } else {
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ system_instruction: { parts: [{ text: sysPrompt }] }, contents: [{ parts: [{ inline_data: { mime_type: image.mediaType, data: image.base64 } }, { text: userText }] }], generationConfig: { maxOutputTokens: 2000 } }),
-          });
-          if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `Gemini API 錯誤 ${res.status}`); }
-          const data = await res.json();
-          return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        }
+        const key = apiKey.trim();
+        if (!key) throw new Error('請輸入 OpenRouter API 密鑰。');
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${key}`,
+            'HTTP-Referer': 'https://captaintt2019-code.github.io/examgo/',
+            'X-Title': 'ExamGo',
+          },
+          body: JSON.stringify({
+            model: 'anthropic/claude-sonnet-4-5',
+            max_tokens: 2000,
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: [
+                { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } },
+                { type: 'text', text: userText }
+              ]}
+            ]
+          }),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `OpenRouter API 錯誤 ${res.status}`); }
+        const data = await res.json();
+        return data.choices[0].message.content || '';
       };
 
       const generate = async () => {
@@ -330,8 +331,7 @@
 
       const downloadAnswers = async () => {
         if (!image || !output) return;
-        const key = provider === 'claude' ? apiKey.trim() : geminiKey.trim();
-        if (!key) { setError('請輸入 API 密鑰。'); return; }
+        if (!apiKey.trim()) { setError('請輸入 OpenRouter API 密鑰。'); return; }
         setLoadingAnswers(true); setError('');
         const langNote = language === 'chinese' ? 'Write all answers in Traditional Chinese (繁體中文).' : 'Write all answers in English.';
         const sysPrompt = `You are an exam specialist. The user has a worksheet generated from a homework image. Produce a complete answer key. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
@@ -377,18 +377,13 @@
                   <span className="hidden sm:inline">歷史記錄</span>
                   {history.length > 0 && <span className="bg-blue-100 text-blue-700 rounded-full px-1.5 text-xs font-bold">{history.length}</span>}
                 </button>
-                <div className="flex rounded-lg border border-gray-300 overflow-hidden text-xs font-medium">
-                  <button onClick={() => setProvider('claude')} className={`px-2.5 py-2 transition-colors ${provider==='claude' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Claude</button>
-                  <button onClick={() => setProvider('gemini')} className={`px-2.5 py-2 transition-colors ${provider==='gemini' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Gemini</button>
-                </div>
+                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">OpenRouter · Claude Sonnet 4</span>
               </div>
             </div>
             {/* API Key row */}
             <div className="flex items-center gap-2 mt-2">
               <Icons.Key className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-              {provider === 'claude'
-                ? <input type={showKey?'text':'password'} placeholder="Anthropic API 密鑰" value={apiKey} onChange={e => saveKey(e.target.value)} className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />
-                : <input type={showKey?'text':'password'} placeholder="Gemini API 密鑰" value={geminiKey} onChange={e => saveGeminiKey(e.target.value)} className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />}
+              <input type={showKey?'text':'password'} placeholder="OpenRouter API 密鑰" value={apiKey} onChange={e => saveKey(e.target.value)} className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               <button onClick={() => setShowKey(v => !v)} className="text-xs text-gray-500 hover:text-blue-600 underline whitespace-nowrap">{showKey ? '隱藏' : '顯示'}</button>
             </div>
           </header>
