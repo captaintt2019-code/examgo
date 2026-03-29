@@ -299,7 +299,7 @@
             'anthropic-dangerous-direct-browser-access': 'true',
           },
           body: JSON.stringify({
-            model: 'claude-opus-4-6',
+            model: 'claude-sonnet-4-5',
             max_tokens: 2000,
             system: sysPrompt,
             messages: [{ role: 'user', content: [
@@ -382,7 +382,7 @@
                   <span className="hidden sm:inline">歷史記錄</span>
                   {history.length > 0 && <span className="bg-blue-100 text-blue-700 rounded-full px-1.5 text-xs font-bold">{history.length}</span>}
                 </button>
-                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">Anthropic · Claude Opus 4</span>
+                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">Anthropic · Claude Sonnet 4</span>
               </div>
             </div>
             {/* API Key row */}
