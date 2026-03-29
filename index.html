@@ -242,7 +242,7 @@
       };
       const [isDragging, setIsDragging]   = useState(false);
       const [difficulty, setDifficulty]   = useState('same');
-      const [language, setLanguage]       = useState('chinese');
+      const [language, setLanguage]       = useState('english');
       const [qCount, setQCount]           = useState('same');
       const [history, setHistory]         = useState(() => { try { return JSON.parse(localStorage.getItem('examgo_history') || '[]'); } catch { return []; } });
       const [showHistory, setShowHistory] = useState(false);
@@ -289,35 +289,33 @@
 
       const callApi = async (sysPrompt, userText) => {
         const key = apiKey.trim();
-        if (!key) throw new Error('請輸入 OpenRouter API 密鑰。');
-        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        if (!key) throw new Error('請輸入 Anthropic API 密鑰。');
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${key}`,
-            'HTTP-Referer': 'https://captaintt2019-code.github.io/examgo/',
-            'X-Title': 'ExamGo',
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
           },
           body: JSON.stringify({
-            model: 'openai/gpt-4o-mini',
+            model: 'claude-opus-4-6',
             max_tokens: 2000,
-            messages: [
-              { role: 'system', content: sysPrompt },
-              { role: 'user', content: [
-                { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } },
-                { type: 'text', text: userText }
-              ]}
-            ]
+            system: sysPrompt,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+              { type: 'text', text: userText }
+            ]}]
           }),
         });
-        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `OpenRouter API 錯誤 ${res.status}`); }
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `API 錯誤 ${res.status}`); }
         const data = await res.json();
-        return data.choices[0].message.content || '';
+        return data.content?.find(b => b.type === 'text')?.text || '';
       };
 
       const generate = async () => {
         if (!image) { setError('請先上傳圖片。'); return; }
-        if (!apiKey.trim()) { setError('請輸入 OpenRouter API 密鑰。'); return; }
+        if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
         setLoading(true); setError(''); setOutput(''); showToast('正在生成，請稍候…', 'info');
         const diffMap  = { easy: 'easier than the original', same: 'the same difficulty', harder: 'harder than the original' };
         const countMap = { same: 'the same number of questions as the original', '+5': '5 more questions than the original', '+10': '10 more questions than the original' };
@@ -338,7 +336,7 @@
 
       const downloadAnswers = async () => {
         if (!image || !output) return;
-        if (!apiKey.trim()) { setError('請輸入 OpenRouter API 密鑰。'); return; }
+        if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
         setLoadingAnswers(true); setError('');
         const langNote = language === 'chinese' ? 'Write all answers in Traditional Chinese (繁體中文).' : 'Write all answers in English.';
         const sysPrompt = `You are an exam specialist. The user has a worksheet generated from a homework image. Produce a complete answer key. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
@@ -384,13 +382,13 @@
                   <span className="hidden sm:inline">歷史記錄</span>
                   {history.length > 0 && <span className="bg-blue-100 text-blue-700 rounded-full px-1.5 text-xs font-bold">{history.length}</span>}
                 </button>
-                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">OpenRouter · GPT-4o mini</span>
+                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">Anthropic · Claude Opus 4</span>
               </div>
             </div>
             {/* API Key row */}
             <div className="flex items-center gap-2 mt-2">
               <Icons.Key className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-              <input type={showKey?'text':'password'} placeholder="OpenRouter API 密鑰" value={apiKey} onChange={e => saveKey(e.target.value)} className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+              <input type={showKey?'text':'password'} placeholder="Anthropic API 密鑰" value={apiKey} onChange={e => saveKey(e.target.value)} className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400" />
               <button onClick={() => setShowKey(v => !v)} className="text-xs text-gray-500 hover:text-blue-600 underline whitespace-nowrap">{showKey ? '隱藏' : '顯示'}</button>
             </div>
           </header>
