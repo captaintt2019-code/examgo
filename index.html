@@ -233,6 +233,13 @@
       const [loading, setLoading]         = useState(false);
       const [loadingAnswers, setLoadingAnswers] = useState(false);
       const [error, setError]             = useState('');
+      const [toast, setToast]             = useState(null);
+      const toastTimer = useRef(null);
+      const showToast = (message, type = 'info') => {
+        setToast({ message, type });
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 4000);
+      };
       const [isDragging, setIsDragging]   = useState(false);
       const [difficulty, setDifficulty]   = useState('same');
       const [language, setLanguage]       = useState('chinese');
@@ -310,9 +317,8 @@
 
       const generate = async () => {
         if (!image) { setError('請先上傳圖片。'); return; }
-        const key = provider === 'claude' ? apiKey.trim() : geminiKey.trim();
-        if (!key) { setError('請輸入 API 密鑰。'); return; }
-        setLoading(true); setError(''); setOutput('');
+        if (!apiKey.trim()) { setError('請輸入 OpenRouter API 密鑰。'); return; }
+        setLoading(true); setError(''); setOutput(''); showToast('正在生成，請稍候…', 'info');
         const diffMap  = { easy: 'easier than the original', same: 'the same difficulty', harder: 'harder than the original' };
         const countMap = { same: 'the same number of questions as the original', '+5': '5 more questions than the original', '+10': '10 more questions than the original' };
         const langNote = language === 'chinese' ? 'Generate all content in Traditional Chinese (繁體中文).' : 'Generate all content in English.';
@@ -325,7 +331,8 @@
           const det = detectSubject(text);
           setOutput(text); setSubject(det);
           addHistory({ id: Date.now(), timestamp: Date.now(), mode, subject: det, output: text });
-        } catch (e) { setError(e.message || '生成失敗，請再試。'); }
+          showToast('✓ 生成完成！', 'success');
+        } catch (e) { setError(e.message || '生成失敗，請再試。'); showToast(e.message || '生成失敗，請再試。', 'error'); }
         finally { setLoading(false); }
       };
 
@@ -509,6 +516,18 @@
               )}
             </div>
           </footer>
+
+          {/* Toast notification */}
+          {toast && (
+            <div className={`fixed bottom-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-medium transition-all ${
+              toast.type === 'success' ? 'bg-green-600 text-white' :
+              toast.type === 'error'   ? 'bg-red-600 text-white' :
+              'bg-gray-800 text-white'
+            }`}>
+              {toast.type === 'error' && <Icons.AlertCircle className="w-4 h-4 flex-shrink-0" />}
+              {toast.message}
+            </div>
+          )}
         </div>
       );
     }
