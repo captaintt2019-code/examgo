@@ -226,10 +226,10 @@
       const [mode, setMode]               = useState('worksheet');
       const [apiKey, setApiKey]           = useState(() => localStorage.getItem('examgo_key') || '');
       const [showKey, setShowKey]         = useState(false);
-      const [image, setImage]             = useState(null);
+      const [images, setImages]           = useState([]);
       const [converting, setConverting]   = useState(false);
-      const [output, setOutput]           = useState('');
-      const [subject, setSubject]         = useState('');
+      const [outputs, setOutputs]         = useState([]);
+      const [subjects, setSubjects]       = useState([]);
       const [loading, setLoading]         = useState(false);
       const [loadingAnswers, setLoadingAnswers] = useState(false);
       const [error, setError]             = useState('');
@@ -246,7 +246,13 @@
       const [qCount, setQCount]           = useState('same');
       const [history, setHistory]         = useState(() => { try { return JSON.parse(localStorage.getItem('examgo_history') || '[]'); } catch { return []; } });
       const [showHistory, setShowHistory] = useState(false);
+      const [currentPage, setCurrentPage] = useState(0);
       const fileInputRef = useRef(null);
+
+      // Derived from multi-page arrays
+      const output  = outputs[currentPage]  || '';
+      const subject = subjects[currentPage] || '';
+      const image   = images[currentPage]   || null;
 
       if (!unlocked) return <PasswordGate onUnlock={() => setUnlocked(true)} />;
 
@@ -259,35 +265,42 @@
       const isHeic = (file) => file.type === 'image/heic' || file.type === 'image/heif' ||
         file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif');
 
-      const loadImage = async (file) => {
-        if (!file) return;
-        if (!file.type.startsWith('image/') && !isHeic(file)) { setError('請上傳 JPEG、PNG 或 HEIC 圖片。'); return; }
-        setError('');
+      const processFile = async (file) => {
+        if (!file.type.startsWith('image/') && !isHeic(file)) return null;
         let processedFile = file;
         if (isHeic(file)) {
-          setConverting(true);
           try {
             const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
             processedFile = new File([blob], file.name.replace(/\.heic$/i, '.jpg'), { type: 'image/jpeg' });
-          } catch (e) {
-            setConverting(false); setError('HEIC 轉換失敗，請改用 JPEG 或 PNG。'); return;
-          }
-          setConverting(false);
+          } catch (e) { return null; }
         }
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const dataUrl = e.target.result;
-          setImage({ base64: dataUrl.split(',')[1], mediaType: processedFile.type === 'image/png' ? 'image/png' : 'image/jpeg', previewUrl: dataUrl });
-          setOutput(''); setError('');
-        };
-        reader.readAsDataURL(processedFile);
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const dataUrl = e.target.result;
+            resolve({ base64: dataUrl.split(',')[1], mediaType: processedFile.type === 'image/png' ? 'image/png' : 'image/jpeg', previewUrl: dataUrl, name: file.name });
+          };
+          reader.readAsDataURL(processedFile);
+        });
       };
-      const onFileChange = (e) => loadImage(e.target.files[0]);
-      const onDrop = (e) => { e.preventDefault(); setIsDragging(false); loadImage(e.dataTransfer.files[0]); };
+
+      const loadFiles = async (files) => {
+        if (!files || files.length === 0) return;
+        setError(''); setConverting(true);
+        const results = await Promise.all(Array.from(files).map(processFile));
+        const valid = results.filter(Boolean);
+        if (valid.length === 0) { setConverting(false); setError('請上傳 JPEG、PNG 或 HEIC 圖片。'); return; }
+        setImages(prev => [...prev, ...valid].slice(0, 10));
+        setOutputs([]); setSubjects([]); setCurrentPage(0);
+        setConverting(false);
+      };
+
+      const onFileChange = (e) => loadFiles(e.target.files);
+      const onDrop = (e) => { e.preventDefault(); setIsDragging(false); loadFiles(e.dataTransfer.files); };
       const onDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
       const onDragLeave = () => setIsDragging(false);
 
-      const callApi = async (sysPrompt, userText) => {
+      const callApi = async (sysPrompt, userText, img) => {
         const key = apiKey.trim();
         if (!key) throw new Error('請輸入 Anthropic API 密鑰。');
         const res = await fetch('https://yinli.one/v1/chat/completions', {
@@ -297,12 +310,12 @@
             'Authorization': `Bearer ${key}`,
           },
           body: JSON.stringify({
-            model: 'claude-opus-4-20250514',
+            model: 'claude-sonnet-4-5-20250929',
             max_tokens: 2000,
             messages: [
               { role: 'system', content: sysPrompt },
               { role: 'user', content: [
-                { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } },
+                { type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.base64}` } },
                 { type: 'text', text: userText }
               ]}
             ]
@@ -314,39 +327,48 @@
       };
 
       const generate = async () => {
-        if (!image) { setError('請先上傳圖片。'); return; }
+        if (images.length === 0) { setError('請先上傳圖片。'); return; }
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
-        setLoading(true); setError(''); setOutput(''); showToast('正在生成，請稍候…', 'info');
+        setLoading(true); setError(''); setOutputs([]); setSubjects([]); showToast('正在生成，請稍候…', 'info');
         const diffMap  = { easy: 'easier than the original', same: 'the same difficulty', harder: 'harder than the original' };
         const countMap = { same: 'the same number of questions as the original', '+5': '5 more questions than the original', '+10': '10 more questions than the original' };
         const langNote = language === 'chinese' ? 'Generate all content in Traditional Chinese (繁體中文).' : 'Generate all content in English.';
         const sysPrompt = mode === 'worksheet'
-          ? `You are a Senior Exam Specialist for Hong Kong schools. Given a homework image, generate a NEW worksheet with SIMILAR questions. Keep difficulty ${diffMap[difficulty]}, include ${countMap[qCount]}. Add title, subject, date and name lines. Number questions. For math include working space. Format: ## title, ### sections. Start with: Subject | Topic | Grade | Difficulty.\n${langNote}`
+          ? `You are a Senior Exam Specialist for Hong Kong schools. Given a homework image, generate a NEW worksheet with SIMILAR questions. Keep difficulty ${diffMap[difficulty]}, include ${countMap[qCount]}. Add title, subject, date and name lines. Number questions. Do NOT include working space. Format: ## title, ### sections. Start with: Subject | Topic | Grade | Difficulty.\n${langNote}`
           : `You are an expert study assistant for Hong Kong students. Given a study page, generate a memorization test with: Section A (填充題): 5-8 fill-in-the-blank sentences; Section B (短答題): 4-6 short-answer questions. Keep difficulty ${diffMap[difficulty]}. Format: ## title, ### sections. Start with: Subject | Topic | Grade | Difficulty.\n${langNote}`;
         const userText = mode === 'memo' ? 'Generate a memorization test from this study page.' : 'Generate a practice worksheet from this homework page.';
         try {
-          const text = await callApi(sysPrompt, userText);
-          const det = detectSubject(text);
-          setOutput(text); setSubject(det);
-          addHistory({ id: Date.now(), timestamp: Date.now(), mode, subject: det, output: text });
-          showToast('✓ 生成完成！', 'success');
+          const newOutputs = [];
+          const newSubjects = [];
+          for (let i = 0; i < images.length; i++) {
+            showToast(`正在生成第 ${i+1}/${images.length} 頁…`, 'info');
+            const text = await callApi(sysPrompt, userText, images[i]);
+            const det = detectSubject(text);
+            newOutputs.push(text);
+            newSubjects.push(det);
+          }
+          setOutputs(newOutputs); setSubjects(newSubjects); setCurrentPage(0);
+          addHistory({ id: Date.now(), timestamp: Date.now(), mode, subject: newSubjects[0] || 'General', output: newOutputs.join('\n\n---PAGE_BREAK---\n\n') });
+          showToast(`✓ 生成完成！共 ${newOutputs.length} 頁`, 'success');
         } catch (e) { setError(e.message || '生成失敗，請再試。'); showToast(e.message || '生成失敗，請再試。', 'error'); }
         finally { setLoading(false); }
       };
 
       const downloadAnswers = async () => {
-        if (!image || !output) return;
+        if (images.length === 0 || outputs.length === 0) return;
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
         setLoadingAnswers(true); setError('');
         const langNote = language === 'chinese' ? 'Write all answers in Traditional Chinese (繁體中文).' : 'Write all answers in English.';
-        const sysPrompt = `You are an exam specialist. The user has a worksheet generated from a homework image. Produce a complete answer key. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
+        const sysPrompt = `You are an exam specialist. Produce a complete answer key for the worksheet. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
         try {
-          const text = await callApi(sysPrompt, 'Produce a complete answer key for the worksheet generated from this homework image.');
-          const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = 'examgo-answers.txt'; a.click();
-          URL.revokeObjectURL(url);
+          const allAnswers = [];
+          for (let i = 0; i < images.length; i++) {
+            const text = await callApi(sysPrompt, `Produce a complete answer key for page ${i+1} of the worksheet.`, images[i]);
+            allAnswers.push(`=== Page ${i+1} Answers ===\n${text}`);
+          }
+          const win = window.open('', '_blank');
+          win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ExamGo Answers</title><style>body{font-family:Georgia,serif;font-size:12pt;line-height:1.6;padding:2cm;max-width:800px;margin:0 auto}h2{border-bottom:1px solid #ccc;padding-bottom:4px}@media print{@page{margin:2cm;size:A4}}</style></head><body><h1>Answer Key</h1>${allAnswers.map((a,i) => `<h2>Page ${i+1}</h2><pre style="white-space:pre-wrap;font-family:Georgia,serif">${a.replace(/=== Page \d+ Answers ===\n/,'')}</pre>`).join('')}<script>window.print()<\/script></body></html>`);
+          win.document.close();
         } catch (e) { setError(e.message || '下載答案失敗，請再試。'); }
         finally { setLoadingAnswers(false); }
       };
@@ -355,13 +377,17 @@
         <div className="min-h-screen bg-gray-50 flex flex-col" style={{fontFamily:'system-ui,sans-serif'}}>
           {/* Printable area */}
           <div id="examgo-print" style={{display:'none'}}>
-            {output && <WorksheetContent markdown={output} subject={subject} />}
-            <p style={{marginTop:'32px',textAlign:'center',fontSize:'10pt',color:'#888'}}>由 ExamGo AI 生成 • examgo.ai</p>
+            {outputs.map((pg, i) => (
+              <div key={i} style={i > 0 ? {pageBreakBefore:'always',paddingTop:'16px'} : {}}>
+                <WorksheetContent markdown={pg} subject={subjects[i] || ''} />
+              </div>
+            ))}
+            {outputs.length > 0 && <p style={{marginTop:'32px',textAlign:'center',fontSize:'10pt',color:'#888'}}>由 ExamGo AI 生成 • examgo.ai</p>}
           </div>
 
           {/* History drawer */}
           {showHistory && <HistoryPanel history={history}
-            onLoad={e => { setOutput(e.output); setSubject(e.subject); setMode(e.mode); }}
+            onLoad={e => { const pages = e.output.split('\n\n---PAGE_BREAK---\n\n'); setOutputs(pages); setSubjects(pages.map(p => detectSubject(p))); setMode(e.mode); setCurrentPage(0); setShowHistory(false); }}
             onDelete={deleteHistory} onClear={clearHistory} onClose={() => setShowHistory(false)} />}
 
           {/* Top Bar */}
@@ -382,7 +408,7 @@
                   <span className="hidden sm:inline">歷史記錄</span>
                   {history.length > 0 && <span className="bg-blue-100 text-blue-700 rounded-full px-1.5 text-xs font-bold">{history.length}</span>}
                 </button>
-                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">Claude Opus 4</span>
+                <span className="text-xs text-gray-500 bg-gray-100 rounded-md px-2 py-1.5 font-medium">Claude Sonnet 4.5</span>
               </div>
             </div>
             {/* API Key row */}
@@ -395,11 +421,11 @@
 
           {/* Mode Tabs */}
           <div className="no-print bg-white border-b border-gray-200 flex">
-            <button onClick={() => { setMode('worksheet'); setOutput(''); setError(''); }}
+            <button onClick={() => { setMode('worksheet'); setOutputs([]); setSubjects([]); setCurrentPage(0); setError(''); }}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex-1 justify-center md:flex-none md:justify-start ${mode==='worksheet' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
               <Icons.BookOpen className="w-4 h-4" /> 練習工作紙
             </button>
-            <button onClick={() => { setMode('memo'); setOutput(''); setError(''); }}
+            <button onClick={() => { setMode('memo'); setOutputs([]); setSubjects([]); setCurrentPage(0); setError(''); }}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex-1 justify-center md:flex-none md:justify-start ${mode==='memo' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
               <Icons.Brain className="w-4 h-4" /> 記憶測試
             </button>
@@ -412,10 +438,11 @@
               <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                 <Icons.FileImage className="w-4 h-4 text-blue-500" />
                 {mode === 'memo' ? '上傳筆記或課本頁面' : '上傳功課圖片'}
+                {images.length > 0 && <span className="ml-auto text-xs text-gray-400 font-normal">{images.length} 張圖片</span>}
               </h2>
               <div
                 className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-colors ${isDragging ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-blue-300 hover:bg-gray-50'}`}
-                style={{minHeight:'120px'}}
+                style={{minHeight:'100px'}}
                 onClick={() => fileInputRef.current?.click()}
                 onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}
               >
@@ -423,24 +450,43 @@
                   ? <><Icons.Loader2 className="w-7 h-7 mb-1 text-blue-400 animate-spin" /><p className="text-sm text-blue-500">轉換 HEIC 中…</p></>
                   : <><Icons.Upload className={`w-7 h-7 mb-1 ${isDragging ? 'text-blue-400' : 'text-gray-300'}`} />
                     <p className="text-sm text-gray-500">拖放圖片至此或<span className="text-blue-600 font-medium">點擊瀏覽</span></p>
-                    <p className="text-xs text-gray-400 mt-0.5">支援 JPEG、PNG、HEIC</p></>
+                    <p className="text-xs text-gray-400 mt-0.5">支援 JPEG、PNG、HEIC（可多選）</p></>
                 }
-                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" className="hidden" onChange={onFileChange} />
+                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" className="hidden" onChange={onFileChange} multiple />
               </div>
-              {image && (
-                <div className="relative rounded-lg border border-gray-200 overflow-hidden" style={{maxHeight:'280px'}}>
-                  <img src={image.previewUrl} alt="上傳的圖片" className="w-full object-contain bg-gray-50" style={{maxHeight:'280px'}} />
-                  <button onClick={() => { setImage(null); setOutput(''); setSubject(''); setError(''); }}
-                    className="absolute top-2 right-2 bg-white rounded-full shadow px-2 py-1 text-xs text-gray-600 hover:text-red-500 border border-gray-200">✕ 移除</button>
+              {images.length > 0 && (
+                <div className="flex flex-col gap-2 overflow-y-auto" style={{maxHeight:'320px'}}>
+                  {images.map((img, idx) => (
+                    <div key={idx} className="relative rounded-lg border border-gray-200 overflow-hidden flex items-center gap-2 p-1 bg-gray-50">
+                      <img src={img.previewUrl} alt={`圖片 ${idx+1}`} className="w-16 h-16 object-contain bg-white rounded border border-gray-100 flex-shrink-0" />
+                      <span className="text-xs text-gray-500 flex-1 truncate">第 {idx+1} 頁 · {img.name}</span>
+                      <button onClick={() => { const n = images.filter((_,i)=>i!==idx); setImages(n); setOutputs([]); setSubjects([]); }}
+                        className="text-gray-400 hover:text-red-500 px-1 text-lg leading-none flex-shrink-0">✕</button>
+                    </div>
+                  ))}
+                  <button onClick={() => { setImages([]); setOutputs([]); setSubjects([]); setError(''); }}
+                    className="text-xs text-red-400 hover:text-red-600 text-center py-1">清除所有圖片</button>
                 </div>
               )}
             </div>
 
             {/* Output Panel */}
             <div className="flex-1 flex flex-col bg-white p-4 gap-3 overflow-hidden">
-              <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                {mode === 'memo' ? <><Icons.Brain className="w-4 h-4 text-purple-500" />生成記憶測試</> : <><Icons.Zap className="w-4 h-4 text-blue-500" />生成練習工作紙</>}
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  {mode === 'memo' ? <><Icons.Brain className="w-4 h-4 text-purple-500" />生成記憶測試</> : <><Icons.Zap className="w-4 h-4 text-blue-500" />生成練習工作紙</>}
+                </h2>
+                {outputs.length > 1 && (
+                  <div className="flex gap-1 ml-auto">
+                    {outputs.map((_, i) => (
+                      <button key={i} onClick={() => setCurrentPage(i)}
+                        className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors ${currentPage === i ? (mode==='memo'?'bg-purple-600 text-white':'bg-blue-600 text-white') : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                        第{i+1}頁
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {error && (
                 <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm">
                   <Icons.AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" /><span>{error}</span>
@@ -486,27 +532,27 @@
               </>}
             </div>
             <div className="flex items-center gap-2 sm:ml-auto flex-wrap">
-              {output && (
+              {outputs.length > 0 && (
                 <button onClick={generate} disabled={loading || loadingAnswers}
                   className="flex items-center gap-2 px-3 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                   <Icons.RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> 重新生成
                 </button>
               )}
-              <button onClick={generate} disabled={loading || loadingAnswers || !image}
+              <button onClick={generate} disabled={loading || loadingAnswers || images.length === 0}
                 className={`flex items-center gap-2 px-4 py-2.5 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 shadow ${mode==='memo' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
                 {loading
                   ? <><Icons.Loader2 className="w-4 h-4 animate-spin" />生成中…</>
                   : <><Icons.Zap className="w-4 h-4" />{mode === 'memo' ? '生成測試' : '生成題目'}</>}
               </button>
-              {output && (
-                <button onClick={downloadAnswers} disabled={loading || loadingAnswers || !image}
+              {outputs.length > 0 && (
+                <button onClick={downloadAnswers} disabled={loading || loadingAnswers || images.length === 0}
                   className="flex items-center gap-2 px-3 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                   {loadingAnswers
                     ? <><Icons.Loader2 className="w-4 h-4 animate-spin" />下載中…</>
                     : <><Icons.Download className="w-4 h-4" />下載答案</>}
                 </button>
               )}
-              {output && (
+              {outputs.length > 0 && (
                 <button onClick={() => window.print()}
                   className="flex items-center gap-2 px-3 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-sm font-medium transition-colors">
                   <Icons.Printer className="w-4 h-4" />列印
