@@ -6,6 +6,7 @@
   <title>ExamGo – 智能練習題生成器</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='bold' fill='white' text-anchor='middle'%3EE%3C/text%3E%3C/svg%3E" />
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -336,7 +337,7 @@
       const generate = async () => {
         if (images.length === 0) { setError('請先上傳圖片。'); return; }
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
-        setLoading(true); setError(''); setOutputs([]); setSubjects([]); setAnswersText(''); showToast('正在生成，請稍候…', 'info');
+        setLoading(true); setError(''); setOutputs([]); setSubjects([]); setAnswersText(''); worksheetPdfRef.current = null; answersPdfRef.current = null; showToast('正在生成，請稍候…', 'info');
         const diffMap  = { easy: 'easier than the original', same: 'the same difficulty', harder: 'harder than the original' };
         const countMap = { same: 'the same number of questions as the original', '+5': '5 more questions than the original', '+10': '10 more questions than the original' };
         const langNote = language === 'chinese' ? 'Generate all content in Traditional Chinese (繁體中文).' : 'Generate all content in English.';
@@ -361,40 +362,105 @@
         finally { setLoading(false); }
       };
 
-      const doShare = (text) => {
-        if (navigator.share) {
-          navigator.share({ title: 'ExamGo', text }).catch(e => {
+      const markdownToHtml = (md) => {
+        const lines = md.split('\n');
+        return lines.map(line => {
+          const t = line.trim();
+          if (!t) return '<div style="height:8px"></div>';
+          if (t.startsWith('## ')) return `<h2 style="text-align:center;font-size:16pt;margin:12pt 0 4pt">${t.slice(3)}</h2>`;
+          if (t.startsWith('### ')) return `<h3 style="font-size:12pt;font-weight:bold;border-bottom:1px solid #999;padding-bottom:2pt;margin:10pt 0 4pt">${t.slice(4)}</h3>`;
+          if (t.startsWith('---')) return '<hr style="border:none;border-top:1px solid #ccc;margin:8pt 0">';
+          if (t.startsWith('| ') && t.endsWith(' |')) {
+            const cells = t.split('|').filter(Boolean).map(c => c.trim());
+            return `<div style="background:#e8f0fe;padding:6pt 8pt;border-radius:4pt;margin:6pt 0">${cells.map(c => `<span style="font-weight:bold;margin-right:12pt">${c}</span>`).join('')}</div>`;
+          }
+          if (/^\d+\.\s/.test(t)) return `<div style="margin-bottom:12pt"><p style="margin:0">${t}</p><div style="border-bottom:1px dotted #aaa;min-height:20pt;margin-top:4pt"></div></div>`;
+          if (t.startsWith('- ') || t.startsWith('* ')) return `<li style="margin-bottom:4pt">${t.slice(2)}</li>`;
+          return `<p style="margin:2pt 0">${t}</p>`;
+        }).join('\n');
+      };
+
+      const buildPdfHtml = (pages, subjects) => {
+        const body = pages.map((pg, i) => {
+          const pageHtml = markdownToHtml(pg);
+          return i > 0 ? `<div style="page-break-before:always;padding-top:16pt">${pageHtml}</div>` : `<div>${pageHtml}</div>`;
+        }).join('');
+        return `<div style="font-family:Georgia,serif;font-size:11pt;line-height:1.6;color:#000">${body}</div>`;
+      };
+
+      const generatePdfBlob = (htmlContent) => new Promise((resolve, reject) => {
+        const el = document.createElement('div');
+        el.style.cssText = 'position:absolute;left:-9999px;top:0;width:794px';
+        el.innerHTML = htmlContent;
+        document.body.appendChild(el);
+        html2pdf().set({
+          margin: [20, 20, 20, 20],
+          filename: 'ExamGo.pdf',
+          image: { type: 'jpeg', quality: 0.95 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          output: 'blob'
+        }).from(el).outputPdf('blob').then(blob => {
+          document.body.removeChild(el);
+          resolve(blob);
+        }).catch(e => { document.body.removeChild(el); reject(e); });
+      });
+
+      const shareBlob = (blob, filename) => {
+        const file = new File([blob], filename, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file], title: 'ExamGo' }).catch(e => {
             if (e.name !== 'AbortError') setError(e.message || '分享失敗');
           });
         } else {
-          navigator.clipboard.writeText(text).then(() => showToast('已複製到剪貼簿', 'success'));
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = filename;
+          document.body.appendChild(a); a.click();
+          document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
       };
 
-      const shareWorksheet = () => {
+      const worksheetPdfRef = useRef(null);
+
+      const shareWorksheet = async () => {
         if (outputs.length === 0) return;
-        doShare(outputs.join('\n\n---\n\n'));
+        try {
+          let blob = worksheetPdfRef.current;
+          if (!blob) {
+            blob = await generatePdfBlob(buildPdfHtml(outputs, subjects));
+            worksheetPdfRef.current = blob;
+          }
+          shareBlob(blob, 'ExamGo_Worksheet.pdf');
+        } catch (e) { setError(e.message || '分享失敗'); }
       };
+
+      const answersPdfRef = useRef(null);
 
       const generateAnswers = async () => {
         if (images.length === 0 || outputs.length === 0) return;
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
-        setLoadingAnswers(true); setAnswersText(''); setError('');
+        setLoadingAnswers(true); setAnswersText(''); answersPdfRef.current = null; setError('');
         const langNote = language === 'chinese' ? 'Write all answers in Traditional Chinese (繁體中文).' : 'Write all answers in English.';
         const sysPrompt = `You are an exam specialist. Produce a complete answer key for the worksheet. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
         try {
           const allAnswers = [];
           for (let i = 0; i < images.length; i++) {
             const text = await callApi(sysPrompt, `Produce a complete answer key for page ${i+1} of the worksheet.`, images[i]);
-            allAnswers.push(images.length > 1 ? `=== Page ${i+1} ===\n${text}` : text);
+            allAnswers.push(images.length > 1 ? `## Page ${i+1} Answers\n\n${text}` : text);
           }
-          setAnswersText(allAnswers.join('\n\n---\n\n'));
+          const combined = allAnswers.join('\n\n---\n\n');
+          setAnswersText(combined);
+          const blob = await generatePdfBlob(buildPdfHtml([combined], []));
+          answersPdfRef.current = blob;
           showToast('答案已生成，點「分享答案」即可分享', 'success');
         } catch (e) { setError(e.message || '生成答案失敗，請再試。'); }
         finally { setLoadingAnswers(false); }
       };
 
-      const shareAnswers = () => { doShare(answersText); };
+      const shareAnswers = () => {
+        if (answersPdfRef.current) shareBlob(answersPdfRef.current, 'ExamGo_Answers.pdf');
+      };
 
       const printPortal = createPortal(
         <>
