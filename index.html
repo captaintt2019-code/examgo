@@ -340,7 +340,7 @@
         const countMap = { same: 'the same number of questions as the original', '+5': '5 more questions than the original', '+10': '10 more questions than the original' };
         const langNote = language === 'chinese' ? 'Generate all content in Traditional Chinese (繁體中文).' : 'Generate all content in English.';
         const sysPrompt = mode === 'worksheet'
-          ? `You are a Senior Exam Specialist for Hong Kong schools. Given a homework image, generate a NEW worksheet with SIMILAR questions. Keep difficulty ${diffMap[difficulty]}, include ${countMap[qCount]}. Add title, subject, date and name lines. Number questions. Do NOT include working space. Format: ## title, ### sections. Start with: Subject | Topic | Grade | Difficulty.\n${langNote}`
+          ? `You are a Senior Exam Specialist for Hong Kong schools. Given a homework image, generate a NEW worksheet with SIMILAR questions. Keep difficulty ${diffMap[difficulty]}, include ${countMap[qCount]}. Add title and subject line only. Number questions. Do NOT include working space, name lines, or date lines. Format: ## title, ### sections. Start with: Subject | Topic | Grade | Difficulty.\n${langNote}`
           : `You are an expert study assistant for Hong Kong students. Given a study page, generate a memorization test with: Section A (填充題): 5-8 fill-in-the-blank sentences; Section B (短答題): 4-6 short-answer questions. Keep difficulty ${diffMap[difficulty]}. Format: ## title, ### sections. Start with: Subject | Topic | Grade | Difficulty.\n${langNote}`;
         const userText = mode === 'memo' ? 'Generate a memorization test from this study page.' : 'Generate a practice worksheet from this homework page.';
         try {
@@ -360,7 +360,27 @@
         finally { setLoading(false); }
       };
 
-      const downloadAnswers = async () => {
+      const shareText = async (text, filename, errorMsg) => {
+        const file = new File([text], filename, { type: 'text/plain' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file] });
+        } else if (navigator.share) {
+          await navigator.share({ title: 'ExamGo', text });
+        } else {
+          await navigator.clipboard.writeText(text);
+          showToast('已複製到剪貼簿', 'success');
+        }
+      };
+
+      const shareWorksheet = async () => {
+        if (outputs.length === 0) return;
+        try {
+          const text = outputs.join('\n\n---\n\n');
+          await shareText(text, 'ExamGo_Worksheet.txt', '分享失敗，請再試。');
+        } catch (e) { if (e.name !== 'AbortError') setError(e.message || '分享失敗，請再試。'); }
+      };
+
+      const shareAnswers = async () => {
         if (images.length === 0 || outputs.length === 0) return;
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
         setLoadingAnswers(true); setError('');
@@ -370,16 +390,10 @@
           const allAnswers = [];
           for (let i = 0; i < images.length; i++) {
             const text = await callApi(sysPrompt, `Produce a complete answer key for page ${i+1} of the worksheet.`, images[i]);
-            allAnswers.push(`=== Page ${i+1} Answers ===\n${text}`);
+            allAnswers.push(images.length > 1 ? `=== Page ${i+1} ===\n${text}` : text);
           }
-          const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ExamGo Answers</title><style>body{font-family:Georgia,serif;font-size:12pt;line-height:1.6;padding:2cm;max-width:800px;margin:0 auto}h2{border-bottom:1px solid #ccc;padding-bottom:4px}@media print{@page{margin:2cm;size:A4}}</style></head><body><h1>Answer Key</h1>${allAnswers.map((a,i) => `<h2>Page ${i+1}</h2><pre style="white-space:pre-wrap;font-family:Georgia,serif">${a.replace(/=== Page \d+ Answers ===\n/,'')}</pre>`).join('')}</body></html>`;
-          const blob = new Blob([html], {type:'text/html'});
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = 'ExamGo_Answers.html';
-          document.body.appendChild(a); a.click();
-          document.body.removeChild(a); URL.revokeObjectURL(url);
-        } catch (e) { setError(e.message || '下載答案失敗，請再試。'); }
+          await shareText(allAnswers.join('\n\n---\n\n'), 'ExamGo_Answers.txt', '分享答案失敗，請再試。');
+        } catch (e) { if (e.name !== 'AbortError') setError(e.message || '分享答案失敗，請再試。'); }
         finally { setLoadingAnswers(false); }
       };
 
@@ -390,7 +404,6 @@
               <WorksheetContent markdown={pg} subject={subjects[i] || ''} />
             </div>
           ))}
-          {outputs.length > 0 && <p style={{marginTop:'32px',textAlign:'center',fontSize:'10pt',color:'#888'}}>由 ExamGo AI 生成 • examgo.ai</p>}
         </>,
         document.getElementById('examgo-print')
       );
@@ -559,17 +572,17 @@
                   : <><Icons.Zap className="w-4 h-4" />{mode === 'memo' ? '生成測試' : '生成題目'}</>}
               </button>
               {outputs.length > 0 && (
-                <button onClick={downloadAnswers} disabled={loading || loadingAnswers || images.length === 0}
-                  className="flex items-center gap-2 px-3 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
-                  {loadingAnswers
-                    ? <><Icons.Loader2 className="w-4 h-4 animate-spin" />下載中…</>
-                    : <><Icons.Download className="w-4 h-4" />下載答案</>}
+                <button onClick={shareWorksheet} disabled={loading || loadingAnswers}
+                  className="flex items-center gap-2 px-3 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                  <Icons.Download className="w-4 h-4" />分享題目
                 </button>
               )}
               {outputs.length > 0 && (
-                <button onClick={() => window.print()}
-                  className="flex items-center gap-2 px-3 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-sm font-medium transition-colors">
-                  <Icons.Printer className="w-4 h-4" />列印
+                <button onClick={shareAnswers} disabled={loading || loadingAnswers || images.length === 0}
+                  className="flex items-center gap-2 px-3 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                  {loadingAnswers
+                    ? <><Icons.Loader2 className="w-4 h-4 animate-spin" />生成中…</>
+                    : <><Icons.Download className="w-4 h-4" />分享答案</>}
                 </button>
               )}
             </div>
