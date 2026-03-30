@@ -238,6 +238,7 @@
       const [subjects, setSubjects]       = useState([]);
       const [loading, setLoading]         = useState(false);
       const [loadingAnswers, setLoadingAnswers] = useState(false);
+      const [answersText, setAnswersText]         = useState('');
       const [error, setError]             = useState('');
       const [toast, setToast]             = useState(null);
       const toastTimer = useRef(null);
@@ -335,7 +336,7 @@
       const generate = async () => {
         if (images.length === 0) { setError('請先上傳圖片。'); return; }
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
-        setLoading(true); setError(''); setOutputs([]); setSubjects([]); showToast('正在生成，請稍候…', 'info');
+        setLoading(true); setError(''); setOutputs([]); setSubjects([]); setAnswersText(''); showToast('正在生成，請稍候…', 'info');
         const diffMap  = { easy: 'easier than the original', same: 'the same difficulty', harder: 'harder than the original' };
         const countMap = { same: 'the same number of questions as the original', '+5': '5 more questions than the original', '+10': '10 more questions than the original' };
         const langNote = language === 'chinese' ? 'Generate all content in Traditional Chinese (繁體中文).' : 'Generate all content in English.';
@@ -360,30 +361,25 @@
         finally { setLoading(false); }
       };
 
-      const shareText = async (text, filename, errorMsg) => {
-        const file = new File([text], filename, { type: 'text/plain' });
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file] });
-        } else if (navigator.share) {
-          await navigator.share({ title: 'ExamGo', text });
+      const doShare = (text) => {
+        if (navigator.share) {
+          navigator.share({ title: 'ExamGo', text }).catch(e => {
+            if (e.name !== 'AbortError') setError(e.message || '分享失敗');
+          });
         } else {
-          await navigator.clipboard.writeText(text);
-          showToast('已複製到剪貼簿', 'success');
+          navigator.clipboard.writeText(text).then(() => showToast('已複製到剪貼簿', 'success'));
         }
       };
 
-      const shareWorksheet = async () => {
+      const shareWorksheet = () => {
         if (outputs.length === 0) return;
-        try {
-          const text = outputs.join('\n\n---\n\n');
-          await shareText(text, 'ExamGo_Worksheet.txt', '分享失敗，請再試。');
-        } catch (e) { if (e.name !== 'AbortError') setError(e.message || '分享失敗，請再試。'); }
+        doShare(outputs.join('\n\n---\n\n'));
       };
 
-      const shareAnswers = async () => {
+      const generateAnswers = async () => {
         if (images.length === 0 || outputs.length === 0) return;
         if (!apiKey.trim()) { setError('請輸入 Anthropic API 密鑰。'); return; }
-        setLoadingAnswers(true); setError('');
+        setLoadingAnswers(true); setAnswersText(''); setError('');
         const langNote = language === 'chinese' ? 'Write all answers in Traditional Chinese (繁體中文).' : 'Write all answers in English.';
         const sysPrompt = `You are an exam specialist. Produce a complete answer key for the worksheet. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
         try {
@@ -392,10 +388,13 @@
             const text = await callApi(sysPrompt, `Produce a complete answer key for page ${i+1} of the worksheet.`, images[i]);
             allAnswers.push(images.length > 1 ? `=== Page ${i+1} ===\n${text}` : text);
           }
-          await shareText(allAnswers.join('\n\n---\n\n'), 'ExamGo_Answers.txt', '分享答案失敗，請再試。');
-        } catch (e) { if (e.name !== 'AbortError') setError(e.message || '分享答案失敗，請再試。'); }
+          setAnswersText(allAnswers.join('\n\n---\n\n'));
+          showToast('答案已生成，點「分享答案」即可分享', 'success');
+        } catch (e) { setError(e.message || '生成答案失敗，請再試。'); }
         finally { setLoadingAnswers(false); }
       };
+
+      const shareAnswers = () => { doShare(answersText); };
 
       const printPortal = createPortal(
         <>
@@ -577,12 +576,18 @@
                   <Icons.Download className="w-4 h-4" />分享題目
                 </button>
               )}
-              {outputs.length > 0 && (
-                <button onClick={shareAnswers} disabled={loading || loadingAnswers || images.length === 0}
+              {outputs.length > 0 && !answersText && (
+                <button onClick={generateAnswers} disabled={loading || loadingAnswers || images.length === 0}
                   className="flex items-center gap-2 px-3 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                   {loadingAnswers
                     ? <><Icons.Loader2 className="w-4 h-4 animate-spin" />生成中…</>
-                    : <><Icons.Download className="w-4 h-4" />分享答案</>}
+                    : <><Icons.Zap className="w-4 h-4" />生成答案</>}
+                </button>
+              )}
+              {outputs.length > 0 && answersText && (
+                <button onClick={shareAnswers} disabled={loading}
+                  className="flex items-center gap-2 px-3 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                  <Icons.Download className="w-4 h-4" />分享答案
                 </button>
               )}
             </div>
