@@ -6,7 +6,7 @@
   <title>ExamGo – 智能練習題生成器</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='bold' fill='white' text-anchor='middle'%3EE%3C/text%3E%3C/svg%3E" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -362,49 +362,80 @@
         finally { setLoading(false); }
       };
 
-      const markdownToHtml = (md) => {
-        const lines = md.split('\n');
-        return lines.map(line => {
-          const t = line.trim();
-          if (!t) return '<div style="height:8px"></div>';
-          if (t.startsWith('## ')) return `<h2 style="text-align:center;font-size:16pt;margin:12pt 0 4pt">${t.slice(3)}</h2>`;
-          if (t.startsWith('### ')) return `<h3 style="font-size:12pt;font-weight:bold;border-bottom:1px solid #999;padding-bottom:2pt;margin:10pt 0 4pt">${t.slice(4)}</h3>`;
-          if (t.startsWith('---')) return '<hr style="border:none;border-top:1px solid #ccc;margin:8pt 0">';
-          if (t.startsWith('| ') && t.endsWith(' |')) {
-            const cells = t.split('|').filter(Boolean).map(c => c.trim());
-            return `<div style="background:#e8f0fe;padding:6pt 8pt;border-radius:4pt;margin:6pt 0">${cells.map(c => `<span style="font-weight:bold;margin-right:12pt">${c}</span>`).join('')}</div>`;
-          }
-          if (/^\d+\.\s/.test(t)) return `<div style="margin-bottom:12pt"><p style="margin:0">${t}</p><div style="border-bottom:1px dotted #aaa;min-height:20pt;margin-top:4pt"></div></div>`;
-          if (t.startsWith('- ') || t.startsWith('* ')) return `<li style="margin-bottom:4pt">${t.slice(2)}</li>`;
-          return `<p style="margin:2pt 0">${t}</p>`;
-        }).join('\n');
-      };
 
-      const buildPdfHtml = (pages, subjects) => {
-        const body = pages.map((pg, i) => {
-          const pageHtml = markdownToHtml(pg);
-          return i > 0 ? `<div style="page-break-before:always;padding-top:16pt">${pageHtml}</div>` : `<div>${pageHtml}</div>`;
-        }).join('');
-        return `<div style="font-family:Georgia,serif;font-size:11pt;line-height:1.6;color:#000">${body}</div>`;
-      };
+      const generatePdfBlob = (pages) => {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+        const marginL = 20, marginR = 20, marginT = 20, marginB = 20;
+        const pageW = 210, pageH = 297;
+        const usableW = pageW - marginL - marginR;
+        let y = marginT;
 
-      const generatePdfBlob = (htmlContent) => new Promise((resolve, reject) => {
-        const el = document.createElement('div');
-        el.style.cssText = 'position:absolute;left:-9999px;top:0;width:794px';
-        el.innerHTML = htmlContent;
-        document.body.appendChild(el);
-        html2pdf().set({
-          margin: [20, 20, 20, 20],
-          filename: 'ExamGo.pdf',
-          image: { type: 'jpeg', quality: 0.95 },
-          html2canvas: { scale: 2, useCORS: true },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-          output: 'blob'
-        }).from(el).outputPdf('blob').then(blob => {
-          document.body.removeChild(el);
-          resolve(blob);
-        }).catch(e => { document.body.removeChild(el); reject(e); });
-      });
+        const addPage = () => { doc.addPage(); y = marginT; };
+        const checkY = (h) => { if (y + h > pageH - marginB) addPage(); };
+
+        const splitLines = (text, fontSize, maxW) => {
+          doc.setFontSize(fontSize);
+          return doc.splitTextToSize(text, maxW);
+        };
+
+        pages.forEach((pg, pi) => {
+          if (pi > 0) addPage();
+          const lines = pg.split('\n');
+          lines.forEach(line => {
+            const t = line.trim();
+            if (!t) { y += 3; return; }
+            if (t.startsWith('## ')) {
+              const txt = t.slice(3);
+              checkY(10);
+              doc.setFontSize(16); doc.setFont('helvetica','bold');
+              doc.text(txt, pageW/2, y, { align:'center' });
+              y += 8;
+            } else if (t.startsWith('### ')) {
+              const txt = t.slice(4);
+              checkY(8);
+              doc.setFontSize(12); doc.setFont('helvetica','bold');
+              doc.text(txt, marginL, y);
+              y += 1;
+              doc.setDrawColor(150); doc.line(marginL, y, pageW - marginR, y);
+              y += 6;
+            } else if (t.startsWith('---')) {
+              checkY(4);
+              doc.setDrawColor(180); doc.line(marginL, y, pageW - marginR, y);
+              y += 4;
+            } else if (t.startsWith('| ') && t.endsWith(' |')) {
+              const cells = t.split('|').filter(Boolean).map(c => c.trim()).join('  |  ');
+              checkY(7);
+              doc.setFontSize(10); doc.setFont('helvetica','bold');
+              const wrapped = splitLines(cells, 10, usableW);
+              doc.text(wrapped, marginL, y);
+              y += wrapped.length * 5 + 2;
+            } else if (/^\d+\.\s/.test(t)) {
+              checkY(12);
+              doc.setFontSize(11); doc.setFont('helvetica','normal');
+              const clean = t.replace(/\*\*(.*?)\*\*/g, '$1');
+              const wrapped = splitLines(clean, 11, usableW);
+              doc.text(wrapped, marginL, y);
+              y += wrapped.length * 6 + 8;
+            } else if (t.startsWith('- ') || t.startsWith('* ')) {
+              checkY(6);
+              doc.setFontSize(11); doc.setFont('helvetica','normal');
+              const clean = t.slice(2).replace(/\*\*(.*?)\*\*/g, '$1');
+              const wrapped = splitLines('• ' + clean, 11, usableW - 4);
+              doc.text(wrapped, marginL + 4, y);
+              y += wrapped.length * 6;
+            } else {
+              checkY(6);
+              doc.setFontSize(11); doc.setFont('helvetica','normal');
+              const clean = t.replace(/\*\*(.*?)\*\*/g, '$1');
+              const wrapped = splitLines(clean, 11, usableW);
+              doc.text(wrapped, marginL, y);
+              y += wrapped.length * 6;
+            }
+          });
+        });
+        return Promise.resolve(doc.output('blob'));
+      };
 
       const shareBlob = (blob, filename) => {
         const file = new File([blob], filename, { type: 'application/pdf' });
@@ -428,7 +459,7 @@
         try {
           let blob = worksheetPdfRef.current;
           if (!blob) {
-            blob = await generatePdfBlob(buildPdfHtml(outputs, subjects));
+            blob = await generatePdfBlob(outputs);
             worksheetPdfRef.current = blob;
           }
           shareBlob(blob, 'ExamGo_Worksheet.pdf');
@@ -451,7 +482,7 @@
           }
           const combined = allAnswers.join('\n\n---\n\n');
           setAnswersText(combined);
-          const blob = await generatePdfBlob(buildPdfHtml([combined], []));
+          const blob = await generatePdfBlob([combined]);
           answersPdfRef.current = blob;
           showToast('答案已生成，點「分享答案」即可分享', 'success');
         } catch (e) { setError(e.message || '生成答案失敗，請再試。'); }
