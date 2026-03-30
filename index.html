@@ -82,8 +82,11 @@
     function WorksheetContent({ markdown, subject }) {
       if (!markdown) return null;
       const isMath = subject === 'Mathematics';
+      function unescape(str) {
+        return str.replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
+      }
       function inlineBold(str) {
-        const parts = str.split(/\*\*(.*?)\*\*/g);
+        const parts = unescape(str).split(/\*\*(.*?)\*\*/g);
         return parts.map((p, i) => i % 2 === 1 ? <strong key={i}>{p}</strong> : p);
       }
       const lines = markdown.split('\n');
