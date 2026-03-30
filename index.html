@@ -290,27 +290,27 @@
       const callApi = async (sysPrompt, userText) => {
         const key = apiKey.trim();
         if (!key) throw new Error('請輸入 Anthropic API 密鑰。');
-        const res = await fetch('https://yinli.one/v1/messages', {
+        const res = await fetch('https://yinli.one/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': key,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
+            'Authorization': `Bearer ${key}`,
           },
           body: JSON.stringify({
             model: 'claude-opus-4-20250514',
             max_tokens: 2000,
-            system: sysPrompt,
-            messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
-              { type: 'text', text: userText }
-            ]}]
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: [
+                { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } },
+                { type: 'text', text: userText }
+              ]}
+            ]
           }),
         });
         if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error?.message || `API 錯誤 ${res.status}`); }
         const data = await res.json();
-        return data.content?.find(b => b.type === 'text')?.text || '';
+        return data.choices[0].message.content || '';
       };
 
       const generate = async () => {
