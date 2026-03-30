@@ -324,10 +324,10 @@
             max_tokens: 2000,
             messages: [
               { role: 'system', content: sysPrompt },
-              { role: 'user', content: [
+              { role: 'user', content: img ? [
                 { type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.base64}` } },
                 { type: 'text', text: userText }
-              ]}
+              ] : userText }
             ]
           }),
         });
@@ -385,7 +385,7 @@
           if (pi > 0) addPage();
           const lines = pg.split('\n');
           lines.forEach(line => {
-            const t = line.trim();
+            const t = line.trim().replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
             if (!t) { y += 3; return; }
             if (t.startsWith('## ')) {
               const txt = t.slice(3);
@@ -474,9 +474,10 @@
         const sysPrompt = `You are an exam specialist. Produce a complete answer key for the worksheet. Number each answer to match the question numbers exactly. Be concise and accurate.\n${langNote}`;
         try {
           const allAnswers = [];
-          for (let i = 0; i < images.length; i++) {
-            const text = await callApi(sysPrompt, `Produce a complete answer key for page ${i+1} of the worksheet.`, images[i]);
-            allAnswers.push(images.length > 1 ? `## Page ${i+1} Answers\n\n${text}` : text);
+          for (let i = 0; i < outputs.length; i++) {
+            const userMsg = `Here is the worksheet:\n\n${outputs[i]}\n\nProduce a complete answer key for the above worksheet. Number each answer to match the question numbers exactly.`;
+            const text = await callApi(sysPrompt, userMsg, null);
+            allAnswers.push(outputs.length > 1 ? `## Page ${i+1} Answers\n\n${text}` : text);
           }
           const combined = allAnswers.join('\n\n---\n\n');
           setAnswersText(combined);
