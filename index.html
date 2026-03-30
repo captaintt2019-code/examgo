@@ -243,6 +243,8 @@
       const [error, setError]             = useState('');
       const [toast, setToast]             = useState(null);
       const toastTimer = useRef(null);
+      const worksheetPdfRef = useRef(null);
+      const answersPdfRef = useRef(null);
       const showToast = (message, type = 'info') => {
         setToast({ message, type });
         clearTimeout(toastTimer.current);
@@ -452,8 +454,6 @@
         }
       };
 
-      const worksheetPdfRef = useRef(null);
-
       const shareWorksheet = async () => {
         if (outputs.length === 0) return;
         try {
@@ -465,8 +465,6 @@
           shareBlob(blob, 'ExamGo_Worksheet.pdf');
         } catch (e) { setError(e.message || '分享失敗'); }
       };
-
-      const answersPdfRef = useRef(null);
 
       const generateAnswers = async () => {
         if (images.length === 0 || outputs.length === 0) return;
